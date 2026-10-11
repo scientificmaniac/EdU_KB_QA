@@ -22,6 +22,7 @@
 - [打包为 exe](#打包为-exe)
 - [常见问题](#常见问题)
 - [开发说明](#开发说明)
+- [贡献](#贡献)
 - [许可证](#许可证)
 
 ---
@@ -214,49 +215,121 @@ python -m career_qa [选项]      # 等价写法
 
 ## 项目结构
 
+箭头表示「依赖 / 调用」方向，不必记忆目录树：
+
+```mermaid
+flowchart TB
+    subgraph L1["入口层"]
+        direction LR
+        APP["app.py<br/>兼容入口 · python app.py"]
+        MOD["__main__.py<br/>python -m career_qa"]
+        CLI["cli.py<br/>参数解析 · --check 自检"]
+    end
+
+    subgraph L2["界面层"]
+        direction LR
+        GUI["gui.py<br/>tkinter 界面<br/>主线程快照 + 消息泵"]
+    end
+
+    subgraph L3["核心层（不依赖 tkinter，可独立测试）"]
+        direction LR
+        DLG["dialogue.py<br/>检索 + 提示词 + 多轮历史"]
+        KB["knowledge_base.py<br/>知识库读写 · 相似度检索"]
+        LLM["llm_client.py<br/>Ollama 流式客户端"]
+        CFG["config.py<br/>分层配置与校验"]
+    end
+
+    subgraph L4["数据与配置"]
+        direction LR
+        KBJ["knowledge_base.json<br/>示例知识库"]
+        CFGJ["config.json<br/>由 example 复制"]
+    end
+
+    APP --> CLI
+    MOD --> CLI
+    CLI --> GUI
+    CLI --> CFG
+    GUI --> DLG
+    GUI --> CFG
+    DLG --> KB
+    DLG --> LLM
+    DLG --> CFG
+    KB -.读写.-> KBJ
+    CFG -.读取.-> CFGJ
 ```
-EDU_KB_Q&A/
-├── app.py                      # 兼容入口（python app.py）
-├── career_qa/                  # 应用包
-│   ├── __init__.py             # 版本与包说明
-│   ├── __main__.py             # python -m career_qa
-│   ├── cli.py                  # 命令行入口、环境自检
-│   ├── config.py               # 配置加载与校验
-│   ├── knowledge_base.py       # 知识库读写 + 中文相似度检索
-│   ├── llm_client.py           # Ollama HTTP 客户端（流式 / 缓存 / 重试）
-│   ├── dialogue.py             # 检索 + 提示词 + 多轮历史编排
-│   └── gui.py                  # tkinter 界面
-├── tests/                      # 182 个自动化测试（Mock，无需 Ollama）
-│   ├── test_config.py
-│   ├── test_knowledge_base.py
-│   ├── test_llm_client.py
-│   ├── test_dialogue.py
-│   └── test_gui_smoke.py       # GUI 端到端冒烟（无显示环境自动跳过）
-├── knowledge_base.json         # 示例知识库
-├── config.example.json         # 配置模板
-├── requirements.txt
-├── .github/workflows/ci.yml    # GitHub Actions 持续集成
-├── 智能问答系统.spec            # PyInstaller 打包配置
-├── CHANGELOG.md
-└── LICENSE
-```
+
+| 路径 | 说明 |
+|---|---|
+| `app.py` | 兼容入口，`python app.py` 即可启动；`from app import ChatGUI` 的老写法仍然可用 |
+| `career_qa/__init__.py` | 版本号唯一来源与包说明 |
+| `career_qa/__main__.py` | 支持 `python -m career_qa` |
+| `career_qa/cli.py` | 命令行入口、环境自检、打包后释放内嵌数据文件 |
+| `career_qa/config.py` | 配置加载、类型转换与校验 |
+| `career_qa/knowledge_base.py` | 知识库读写（原子写入）、中文相似度检索 |
+| `career_qa/llm_client.py` | Ollama HTTP 客户端：NDJSON 流式、LRU 缓存、重试与错误分类 |
+| `career_qa/dialogue.py` | 检索 + 提示词构造 + 多轮历史裁剪 |
+| `career_qa/gui.py` | tkinter 界面与线程安全的消息泵 |
+| `tests/` | 182 个自动化测试，全部 Mock，无需 Ollama；GUI 冒烟在无显示环境自动跳过 |
+| `knowledge_base.json` | 示例知识库 |
+| `config.example.json` | 配置模板，复制为 `config.json` 后生效 |
+| `requirements.txt` | 运行时依赖（仅 `requests`） |
+| `.github/workflows/ci.yml` | GitHub Actions：Python 3.9 / 3.11 / 3.12 上运行测试 |
+| `智能问答系统.spec` | PyInstaller 打包配置 |
+| `CONTRIBUTING.md` | 贡献指南 |
+| `CHANGELOG.md` | 版本变更记录 |
 
 ### 数据流
 
+下图同时说明了**线程边界**：只有主线程能操作 Tk 控件，
+工作线程通过 `queue.Queue` 把纯文本交回主线程渲染。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant M as 主线程（GUI）
+    participant W as 工作线程
+    participant KB as KnowledgeBase
+    participant O as Ollama
+
+    U->>M: 输入问题并发送
+    M->>M: 快照 selected_tags（不跨线程读 Tk 变量）
+    M->>M: 禁用发送按钮，写入「你：…」
+    M->>W: 启动 Thread(_worker)
+
+    W->>KB: search(问题, tags, top_n, min_score)
+    Note over KB: 标签过滤 → 相似度打分 → 阈值筛选
+    KB-->>W: SearchHit 列表
+    W->>W: build_prompt() 注入参考资料
+
+    W->>O: POST /api/chat，stream=true，携带多轮历史
+    loop 逐行解析 NDJSON
+        O-->>W: 回答片段
+        W-->>M: queue.put 片段
+        M->>M: _pump() 追加渲染
+    end
+    O-->>W: 生成结束
+
+    W->>W: 记录本轮历史（按 max_history_turns 裁剪）
+    W-->>M: queue.put 完成信号
+    M->>M: 恢复发送按钮
+
+    Note over M,W: 跨线程只传纯文本<br/>所有 Tk 控件操作都在主线程
 ```
-用户提问
-   │
-   ▼
-KnowledgeBase.search()          # 标签过滤 + 相似度打分 + 阈值筛选
-   │  命中的参考资料
-   ▼
-DialogueManager.build_prompt()  # 参考资料 + 问题 → 提示词
-   │
-   ▼
-OllamaClient.stream_chat()      # 携带多轮历史请求 /api/chat
-   │  逐段文本
-   ▼
-queue.Queue → 主线程 _pump()    # 线程安全地渲染到界面
+
+检索与提示词的构造细节：
+
+```mermaid
+flowchart LR
+    Q["用户问题"] --> F["filter_by_tags()<br/>按选中标签过滤候选"]
+    F --> S["score()<br/>bigram Dice × 0.6<br/>+ 序列相似度 × 0.4<br/>+ 标签命中加分"]
+    S --> T{"score ≥ min_score ?"}
+    T -- 否 --> DROP["丢弃"]
+    T -- 是 --> SORT["按分数降序取 top_n"]
+    SORT --> CTX["参考资料块"]
+    Q --> TPL["prompt_template"]
+    CTX --> TPL
+    TPL --> P["最终提示词"]
 ```
 
 ---
@@ -378,22 +451,19 @@ sudo apt install fonts-noto-cjk
 - 依赖通过构造函数注入（`OllamaClient(session=..., sleep=...)`），便于 Mock；
 - 配置对象 `AppConfig` 不可变，用 `with_overrides()` 派生。
 
-### 代码风格
+---
 
-- 全部公开函数带类型标注与中文文档字符串；
-- 提交前请确保 `python -m unittest discover -s tests -t .` 全绿。
+## 贡献
 
-### Git 提交信息建议
+欢迎提交 issue 与 PR！开发环境搭建、分支与提交规范、代码约定、测试要求、
+发布流程等完整说明，请见 **[CONTRIBUTING.md](CONTRIBUTING.md)**。
 
-```
-<类型>: <简短描述>
+最常用的几条命令：
 
-feat     新功能
-fix      缺陷修复
-refactor 重构
-docs     文档
-test     测试
-chore    构建与杂项
+```bash
+python -m unittest discover -s tests -t . -v    # 全部测试（Mock，无需 Ollama）
+python app.py --check                           # 环境自检
+python -m compileall -q career_qa app.py tests  # 语法检查
 ```
 
 ---

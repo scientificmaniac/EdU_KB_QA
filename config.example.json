@@ -1,0 +1,16 @@
+{
+  "kb_path": "knowledge_base.json",
+  "ollama_base_url": "http://localhost:11434",
+  "model": "llama2",
+  "connect_timeout": 5.0,
+  "request_timeout": 120.0,
+  "max_retries": 2,
+  "max_history_turns": 3,
+  "top_n": 3,
+  "min_score": 0.25,
+  "stream": true,
+  "cache_size": 128,
+  "temperature": 0.7,
+  "system_prompt": "你是一名严谨的职业生涯规划顾问。请结合参考资料，用简洁的简体中文回答，并给出可执行的建议。",
+  "prompt_template": "这是一个职业生涯规划相关的问题：{question}\n{context}\n请用简洁语言回答，并提供职业生涯规划方面的相关建议。"
+}

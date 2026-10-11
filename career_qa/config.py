@@ -17,6 +17,8 @@ from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Mapping
 
+from . import __version__
+
 
 def detect_project_root() -> Path:
     """确定「数据根目录」。
@@ -253,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--list-models", action="store_true", help="列出 Ollama 已安装模型后退出"
     )
     parser.add_argument(
-        "--version", action="version", version="%(prog)s 2.0.0"
+        "--version", action="version", version=f"%(prog)s {__version__}"
     )
     return parser
 
